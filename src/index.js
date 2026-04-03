@@ -155,7 +155,7 @@ class VintedSniper {
     if (config.notifications.telegram.enabled && config.notifications.telegram.botToken) {
       try {
         this.telegramBot = new TelegramBot(config);
-        this.telegramBot.setSniper(this);
+        await this.telegramBot.setSniper(this);
         await this.telegramBot.start();
         log.info('Telegram bot started — topics will be created in your group');
       } catch (error) {

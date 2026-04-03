@@ -16,7 +16,6 @@ import { createLogger } from '../utils/logger.js';
 import {
   GENDERS as FALLBACK_GENDERS,
   CATEGORIES as FALLBACK_CATEGORIES,
-  BRANDS as FALLBACK_BRANDS,
   SIZES as FALLBACK_SIZES,
   COLORS as FALLBACK_COLORS,
   CONDITIONS as FALLBACK_CONDITIONS,
@@ -265,10 +264,8 @@ export class LiveCatalog {
       }
     }
 
-    // Fallback to local catalog
-    const q = query.toLowerCase();
-    const local = FALLBACK_BRANDS.filter(b => b.label.toLowerCase().includes(q));
-    return local;
+    // No results from API
+    return [];
   }
 
   /**
@@ -295,9 +292,8 @@ export class LiveCatalog {
       }
     }
 
-    // Fallback
-    this._popularBrands = FALLBACK_BRANDS.slice(0, 12);
-    return this._popularBrands;
+    // No API data available
+    return [];
   }
 
   // ══════════════════════════════════════════

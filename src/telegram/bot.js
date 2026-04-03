@@ -17,16 +17,6 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { createLogger } from '../utils/logger.js';
 import { sleep } from '../utils/retry.js';
-import {
-  GENDERS,
-  CATEGORIES,
-  BRANDS,
-  SIZES,
-  COLORS,
-  CONDITIONS,
-  searchBrands,
-  getSizeGroup,
-} from '../data/vinted-catalog.js';
 import { liveCatalog } from '../data/live-catalog.js';
 import {
   formatNewItem,
@@ -72,21 +62,6 @@ const TOPIC_DEFINITIONS = [
 const FILTER_STEPS = ['gender', 'categories', 'brands', 'sizes', 'colors', 'conditions', 'price', 'keywords', 'recap'];
 const FILTER_TOTAL = FILTER_STEPS.length;
 
-/** Popular brands shown as quick-pick buttons (top 12). */
-const POPULAR_BRANDS = [
-  { id: 53,   label: 'Nike' },
-  { id: 14,   label: 'Adidas' },
-  { id: 255,  label: 'Jordan' },
-  { id: 2319, label: 'New Balance' },
-  { id: 362,  label: 'The North Face' },
-  { id: 10,   label: 'Ralph Lauren' },
-  { id: 73,   label: 'Lacoste' },
-  { id: 57,   label: "Levi's" },
-  { id: 88,   label: 'Puma' },
-  { id: 12,   label: 'Zara' },
-  { id: 105,  label: 'Gucci' },
-  { id: 52,   label: 'Louis Vuitton' },
-];
 
 export class TelegramBot {
   /**
@@ -144,14 +119,16 @@ export class TelegramBot {
    * Sets the sniper reference. Required for all bot actions.
    * @param {object} sniper
    */
-  setSniper(sniper) {
+  async setSniper(sniper) {
     this.sniper = sniper;
     // Initialize live catalog with the Vinted client
     if (sniper?.search?.client) {
       const country = sniper.fullConfig?.countries?.[0] || 'fr';
-      liveCatalog.init(sniper.search.client, country).catch(e => {
-        this.log.warn('Live catalog init failed, using fallback data:', e.message);
-      });
+      try {
+        await liveCatalog.init(sniper.search.client, country);
+      } catch (e) {
+        log.warn('Live catalog init failed, using fallback data:', e.message);
+      }
     }
   }
 
@@ -2109,7 +2086,7 @@ export class TelegramBot {
     switch (step) {
       // ── STEP 1: Gender ──
       case 'gender': {
-        const genderList = liveCatalog.ready ? liveCatalog.getGenders() : GENDERS;
+        const genderList = liveCatalog.getGenders();
         const buttons = genderList.map(g => [{ text: `${g.icon} ${g.label}`, callback_data: `fw:g:${g.id}` }]);
         buttons.push([{ text: '\u23ed Passer', callback_data: 'fw:g:0' }]);
 
@@ -2124,7 +2101,7 @@ export class TelegramBot {
       // ── STEP 2: Categories (drill-down + toggle multi-select) ──
       case 'categories': {
         const genderId = data.genderId;
-        const cats = genderId ? (liveCatalog.ready ? liveCatalog.getCategories(genderId) : (CATEGORIES[genderId] || [])) : [];
+        const cats = genderId ? (liveCatalog.getCategories(genderId)) : [];
         const parentView = data._catParent || null; // which parent are we drilling into?
 
         let shown;
@@ -2180,33 +2157,30 @@ export class TelegramBot {
         break;
       }
 
-      // ── STEP 3: Brands (popular from API + search) ──
+      // ── STEP 3: Brands (search via Vinted API) ──
       case 'brands': {
-        const popularBrands = liveCatalog.ready
-          ? await liveCatalog.getPopularBrands()
-          : POPULAR_BRANDS;
-        const buttons = [];
-        for (let i = 0; i < popularBrands.length; i += 3) {
-          const row = popularBrands.slice(i, i + 3).map(b => {
-            const selected = data.brandIds.includes(b.id);
-            return { text: `${selected ? '✅ ' : ''}${b.label}`, callback_data: `fw:br:${b.id}` };
-          });
-          buttons.push(row);
+        // If we have search results cached, show them
+        if (data.lastBrandSearch && data.lastBrandSearch.length > 0) {
+          await this._renderBrandSearchResults(chatId, messageId, data);
+          break;
+        }
+
+        const buttons = [
+          [{ text: '🔍 Chercher une marque', callback_data: 'fw:br:search' }],
+        ];
+        if (data.brandIds.length > 0) {
+          buttons.push([{ text: '✅ Valider ▶️', callback_data: 'fw:br:done' }]);
         }
         buttons.push([
-          { text: '🔍 Chercher une marque', callback_data: 'fw:br:search' },
-        ]);
-        buttons.push([
           { text: '↩️ Retour', callback_data: 'fw:back' },
-          { text: '✅ Valider ▶️', callback_data: 'fw:br:done' },
           { text: '⏭ Passer', callback_data: 'fw:br:skip' },
         ]);
 
-        let brandPrompt = '<b>Étape 3</b> — Marques (multi-sélection) :';
+        let brandPrompt = '<b>Étape 3</b> — Marques :\n\n🔍 Cherche une marque via l\'API Vinted.';
         if (data.brandIds.length > 0) {
           brandPrompt += `\n\n✅ <b>Sélectionnées (${data.brandIds.length}) : ${data.brandLabels.join(', ')}</b>`;
         }
-        brandPrompt += '\n\n💡 Utilise 🔍 pour chercher parmi toutes les marques Vinted.';
+        brandPrompt += '\n\n💡 Tu peux chercher et ajouter plusieurs marques.';
         const msg = formatFilterWizard(data, step, stepNum, FILTER_TOTAL, {
           buttons,
           prompt: brandPrompt,
@@ -2217,11 +2191,11 @@ export class TelegramBot {
 
       // ── STEP 4: Sizes ──
       case 'sizes': {
-        const allSizes = liveCatalog.ready ? liveCatalog.getSizes() : SIZES;
+        const allSizes = liveCatalog.getSizes();
         // Determine which sizes to show based on selected categories
         let sizeGroup = 'clothing';
         if (data.categoryIds.length > 0) {
-          sizeGroup = (liveCatalog.ready ? liveCatalog : { getSizeGroup }).getSizeGroup(data.categoryIds[0]);
+          sizeGroup = liveCatalog.getSizeGroup(data.categoryIds[0]);
         }
 
         let sizeOptions;
@@ -2261,7 +2235,7 @@ export class TelegramBot {
 
       // ── STEP 5: Colors ──
       case 'colors': {
-        const colorList = liveCatalog.ready ? liveCatalog.getColors() : COLORS;
+        const colorList = liveCatalog.getColors();
         const buttons = [];
         for (let i = 0; i < colorList.length; i += 3) {
           const row = colorList.slice(i, i + 3).map(c => {
@@ -2290,7 +2264,7 @@ export class TelegramBot {
 
       // ── STEP 6: Conditions ──
       case 'conditions': {
-        const conditionList = liveCatalog.ready ? liveCatalog.getConditions() : CONDITIONS;
+        const conditionList = liveCatalog.getConditions();
         const buttons = [];
         const condRow = conditionList.map(c => {
           const selected = data.conditionIds.includes(c.id);
@@ -2419,7 +2393,7 @@ export class TelegramBot {
     if (action.startsWith('g:')) {
       const genderId = parseInt(action.split(':')[1], 10);
       if (genderId > 0) {
-        const genderList = liveCatalog.ready ? liveCatalog.getGenders() : GENDERS;
+        const genderList = liveCatalog.getGenders();
         const gender = genderList.find(g => g.id === genderId);
         data.genderId = genderId;
         data.genderLabel = gender?.label || '';
@@ -2492,12 +2466,12 @@ export class TelegramBot {
         this.setConv(userId, { ...conv, command: 'brand_search' });
         await this.editMessage(chatId, messageId,
           `\ud83d\udd0d <b>Recherche de marque</b>\n\nTape le nom de la marque :`,
-          { inline_keyboard: [[{ text: '\u274c Annuler', callback_data: 'fw:br:back_popular' }]] }
+          { inline_keyboard: [[{ text: '\u274c Annuler', callback_data: 'fw:br:back_brands' }]] }
         );
         return;
       }
-      if (val === 'back_popular') {
-        // Go back to popular brands view
+      if (val === 'back_brands') {
+        // Go back to brands main view
         data.lastBrandSearch = null;
         conv.command = 'filter_wizard';
         this.setConv(userId, conv);
@@ -2512,12 +2486,8 @@ export class TelegramBot {
           data.brandLabels.splice(idx, 1);
         } else {
           data.brandIds.push(brandId);
-          // Find label from search results, popular brands cache, or catalog fallback
-          const allKnown = [
-            ...(data.lastBrandSearch || []),
-            ...(liveCatalog._popularBrands || POPULAR_BRANDS),
-            ...BRANDS,
-          ];
+          // Find label from search results
+          const allKnown = [...(data.lastBrandSearch || [])];
           const brand = allKnown.find(b => b.id === brandId);
           data.brandLabels.push(brand?.label || String(brandId));
         }
@@ -2550,7 +2520,7 @@ export class TelegramBot {
           data.sizeLabels.splice(idx, 1);
         } else {
           data.sizeIds.push(sizeId);
-          const sz = liveCatalog.ready ? liveCatalog.getSizes() : SIZES;
+          const sz = liveCatalog.getSizes();
           const allSizes = [...sz.clothing, ...sz.shoes_men, ...sz.shoes_women, ...sz.jeans];
           const size = allSizes.find(s => s.id === sizeId);
           data.sizeLabels.push(size?.label || String(sizeId));
@@ -2578,7 +2548,7 @@ export class TelegramBot {
           data.colorLabels.splice(idx, 1);
         } else {
           data.colorIds.push(colorId);
-          const colorList = liveCatalog.ready ? liveCatalog.getColors() : COLORS;
+          const colorList = liveCatalog.getColors();
           const color = colorList.find(c => c.id === colorId);
           data.colorLabels.push(color?.label || String(colorId));
         }
@@ -2605,7 +2575,7 @@ export class TelegramBot {
           data.conditionLabels.splice(idx, 1);
         } else {
           data.conditionIds.push(condId);
-          const condList = liveCatalog.ready ? liveCatalog.getConditions() : CONDITIONS;
+          const condList = liveCatalog.getConditions();
           const cond = condList.find(c => c.id === condId);
           data.conditionLabels.push(cond?.short || String(condId));
         }
@@ -2719,7 +2689,7 @@ export class TelegramBot {
         `\ud83d\udd0d Aucune marque trouv\u00e9e pour "<b>${escapeHtml(searchText)}</b>".\n<i>Essaie un autre mot (ex: "pullbear", "pull bear"...)</i>${selectedInfo}`,
         { inline_keyboard: [
           [{ text: '\ud83d\udd0d Autre recherche', callback_data: 'fw:br:search' }],
-          [{ text: '\u21a9\ufe0f Marques populaires', callback_data: 'fw:br:back_popular' }],
+          [{ text: '\u21a9\ufe0f Retour marques', callback_data: 'fw:br:back_brands' }],
           ...(data.brandIds.length > 0 ? [[{ text: '\u2705 Valider \u25b6\ufe0f', callback_data: 'fw:br:done' }]] : []),
         ]}
       );
@@ -2762,7 +2732,7 @@ export class TelegramBot {
     ]);
     buttons.push([
       { text: '✅ Valider ▶️', callback_data: 'fw:br:done' },
-      { text: '↩️ Marques populaires', callback_data: 'fw:br:back_popular' },
+      { text: '↩️ Retour marques', callback_data: 'fw:br:back_brands' },
     ]);
 
     await this.editMessage(chatId, messageId, header, { inline_keyboard: buttons });
@@ -2822,7 +2792,7 @@ export class TelegramBot {
    * Finds a category label by genderId and catId.
    */
   findCategoryLabel(genderId, catId) {
-    const cats = genderId ? (liveCatalog.ready ? liveCatalog.getCategories(genderId) : (CATEGORIES[genderId] || [])) : [];
+    const cats = genderId ? (liveCatalog.getCategories(genderId)) : [];
     for (const cat of cats) {
       if (cat.id === catId) return cat.label;
       if (cat.children) {
