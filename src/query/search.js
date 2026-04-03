@@ -121,6 +121,15 @@ export class VintedSearch {
     const newItems = result.items.filter(item => {
       if (this.seenItems.has(item.id)) return false;
       this.seenItems.set(item.id, Date.now());
+      // Reject items older than 5 minutes — we only want freshly posted items
+      if (item.createdAt) {
+        const ageMs = Date.now() - new Date(item.createdAt).getTime();
+        const maxAgeMs = 5 * 60 * 1000; // 5 minutes
+        if (ageMs > maxAgeMs) {
+          log.debug(`Skipped old item "${item.title}" — posted ${Math.round(ageMs / 60000)}min ago`);
+          return false;
+        }
+      }
       return true;
     });
 
