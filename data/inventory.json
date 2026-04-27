@@ -1,0 +1,73 @@
+{
+  "nextId": 2,
+  "items": [
+    {
+      "id": 1,
+      "vintedItemId": 999,
+      "title": "Nike Air Max 90",
+      "brand": "Nike",
+      "size": "42",
+      "condition": "Très bon",
+      "description": "",
+      "photo": "",
+      "photos": [],
+      "url": "https://vinted.fr/items/999",
+      "country": "fr",
+      "purchasePrice": 25,
+      "purchaseCurrency": "EUR",
+      "purchaseDate": "2026-03-26T22:03:23.565Z",
+      "seller": "test",
+      "sellerRating": 0,
+      "transactionId": null,
+      "autobuyRule": "Nike deals",
+      "dryRun": true,
+      "dealScore": 85,
+      "dealLabel": "",
+      "marketMedian": 45,
+      "status": "vendu",
+      "statusHistory": [
+        {
+          "status": "achete",
+          "date": "2026-03-26T22:03:23.566Z",
+          "note": "Achat initial"
+        },
+        {
+          "status": "recu",
+          "date": "2026-03-26T22:03:23.569Z",
+          "note": "📦 Acheté → ✅ Reçu"
+        },
+        {
+          "status": "en_vente",
+          "date": "2026-03-26T22:03:23.569Z",
+          "note": "✅ Reçu → 🏷️ En vente"
+        },
+        {
+          "status": "vendu",
+          "date": "2026-03-26T22:03:23.570Z",
+          "note": "Vendu 50€ sur vinted"
+        }
+      ],
+      "resalePrice": 45,
+      "resalePriceEffective": 50,
+      "resaleChannel": "vinted",
+      "resaleUrl": "",
+      "resaleDate": "2026-03-26T22:03:23.569Z",
+      "soldDate": "2026-03-26T22:03:23.570Z",
+      "shippingInbound": 3,
+      "shippingOutbound": 0,
+      "platformFees": 2.5,
+      "otherFees": 0,
+      "netProfit": 19.5,
+      "marginPercent": 78,
+      "daysInStock": 0,
+      "relanceCount": 0,
+      "lastRelanceDate": null,
+      "originalResalePrice": 45,
+      "notes": "",
+      "tags": [],
+      "createdAt": "2026-03-26T22:03:23.566Z",
+      "updatedAt": "2026-03-26T22:03:23.570Z"
+    }
+  ],
+  "savedAt": "2026-03-26T22:03:23.572Z"
+}

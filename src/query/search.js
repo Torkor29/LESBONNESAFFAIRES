@@ -133,14 +133,17 @@ export class VintedSearch {
     }
 
     const now = Date.now();
+    let dedupRejected = 0;
+    let freshnessRejected = 0;
+    let noTimestampRejected = 0;
     const newItems = result.items.filter(item => {
-      if (this.seenItems.has(item.id)) return false;
+      if (this.seenItems.has(item.id)) { dedupRejected++; return false; }
 
       // ── Freshness gate: skip items older than window ──
       if (FRESHNESS_WINDOW_MS > 0) {
-        if (!item.createdAt) return false; // No timestamp = skip (don't trust unknown age)
+        if (!item.createdAt) { noTimestampRejected++; return false; }
         const age = now - new Date(item.createdAt).getTime();
-        if (age > FRESHNESS_WINDOW_MS) return false;
+        if (age > FRESHNESS_WINDOW_MS) { freshnessRejected++; return false; }
       }
 
       this.seenItems.set(item.id, now);
@@ -153,6 +156,16 @@ export class VintedSearch {
 
     if (filtered.length > 0) {
       log.info(`Found ${filtered.length} new items for "${query.text || 'all'}"${filtered.length < newItems.length ? ` (${newItems.length - filtered.length} filtered out locally)` : ''}`);
+    } else if (result.items.length > 0 && (dedupRejected + freshnessRejected + noTimestampRejected) === result.items.length) {
+      // All items rejected — log a periodic diagnostic so user sees why nothing fires
+      const queryKey2 = query._name || query.text || query.catalogIds?.join(',') || 'all';
+      this._diagCounters = this._diagCounters || new Map();
+      const c = (this._diagCounters.get(queryKey2) || 0) + 1;
+      this._diagCounters.set(queryKey2, c);
+      // Log every 30 polls (≈ once a minute at burst speed) so we don't spam
+      if (c % 30 === 1) {
+        log.warn(`[diag] "${query.text || 'all'}": 0 new (dedup:${dedupRejected} too_old:${freshnessRejected} no_ts:${noTimestampRejected} total:${result.total})`);
+      }
     }
 
     return filtered;
