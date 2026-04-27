@@ -135,15 +135,20 @@ export class VintedSearch {
     const now = Date.now();
     let dedupRejected = 0;
     let freshnessRejected = 0;
-    let noTimestampRejected = 0;
+    let noTimestampAccepted = 0;
     const newItems = result.items.filter(item => {
       if (this.seenItems.has(item.id)) { dedupRejected++; return false; }
 
       // ── Freshness gate: skip items older than window ──
-      if (FRESHNESS_WINDOW_MS > 0) {
-        if (!item.createdAt) { noTimestampRejected++; return false; }
+      // CRITICAL: if no timestamp is available (Vinted API changes), ACCEPT the item.
+      // The seenItems dedup map already prevents re-notifying the same item, so the
+      // worst case is one false-positive per item that has bubbled into top 24
+      // (vs. silently dropping every single item — which is what just happened).
+      if (FRESHNESS_WINDOW_MS > 0 && item.createdAt) {
         const age = now - new Date(item.createdAt).getTime();
         if (age > FRESHNESS_WINDOW_MS) { freshnessRejected++; return false; }
+      } else if (!item.createdAt) {
+        noTimestampAccepted++;
       }
 
       this.seenItems.set(item.id, now);
@@ -156,7 +161,7 @@ export class VintedSearch {
 
     if (filtered.length > 0) {
       log.info(`Found ${filtered.length} new items for "${query.text || 'all'}"${filtered.length < newItems.length ? ` (${newItems.length - filtered.length} filtered out locally)` : ''}`);
-    } else if (result.items.length > 0 && (dedupRejected + freshnessRejected + noTimestampRejected) === result.items.length) {
+    } else if (result.items.length > 0 && (dedupRejected + freshnessRejected) === result.items.length) {
       // All items rejected — log a periodic diagnostic so user sees why nothing fires
       const queryKey2 = query._name || query.text || query.catalogIds?.join(',') || 'all';
       this._diagCounters = this._diagCounters || new Map();
@@ -164,8 +169,11 @@ export class VintedSearch {
       this._diagCounters.set(queryKey2, c);
       // Log every 30 polls (≈ once a minute at burst speed) so we don't spam
       if (c % 30 === 1) {
-        log.warn(`[diag] "${query.text || 'all'}": 0 new (dedup:${dedupRejected} too_old:${freshnessRejected} no_ts:${noTimestampRejected} total:${result.total})`);
+        log.warn(`[diag] "${query.text || 'all'}": 0 new (dedup:${dedupRejected} too_old:${freshnessRejected} total:${result.total})`);
       }
+    }
+    if (noTimestampAccepted > 0 && filtered.length > 0) {
+      log.debug(`[diag] ${noTimestampAccepted} items had no timestamp — accepted (Vinted API change?)`);
     }
 
     return filtered;
@@ -291,7 +299,9 @@ export class VintedSearch {
       isReserved: raw.is_reserved || false,
       isClosed: raw.is_closed || false,
       isHidden: raw.is_hidden || false,
-      createdAt: raw.created_at_ts ? new Date(raw.created_at_ts * 1000).toISOString() : '',
+      // Try multiple timestamp fields — Vinted's API has changed names over time
+      // Order: created_at_ts (legacy seconds), created_at (ISO/seconds/ms), photo first_image timestamp (last resort)
+      createdAt: parseCreatedAt(raw),
       // ── Lazy: only populated on detail fetch ──
       description: raw.description || '',
       photos: null, // Set by enrichWithDescription if needed
@@ -367,6 +377,44 @@ export class VintedSearch {
   destroy() {
     clearInterval(this.cleanupTimer);
   }
+}
+
+/**
+ * Best-effort extraction of an item's creation timestamp.
+ * Vinted's API field names have shifted over time — try every known shape
+ * before giving up. Returns ISO string or '' (empty = unknown age).
+ */
+function parseCreatedAt(raw) {
+  // Legacy seconds-since-epoch
+  if (raw.created_at_ts && typeof raw.created_at_ts === 'number') {
+    return new Date(raw.created_at_ts * 1000).toISOString();
+  }
+  // ISO string or numeric (could be seconds OR ms)
+  if (raw.created_at) {
+    if (typeof raw.created_at === 'string') {
+      const t = Date.parse(raw.created_at);
+      if (!Number.isNaN(t)) return new Date(t).toISOString();
+    }
+    if (typeof raw.created_at === 'number') {
+      // Heuristic: if value < 1e12 it's seconds, else ms
+      const ms = raw.created_at < 1e12 ? raw.created_at * 1000 : raw.created_at;
+      return new Date(ms).toISOString();
+    }
+  }
+  // High-res ms timestamp some endpoints use
+  if (raw.created_at_ts_ms && typeof raw.created_at_ts_ms === 'number') {
+    return new Date(raw.created_at_ts_ms).toISOString();
+  }
+  // Photo upload time as a proxy (very close to listing creation)
+  if (raw.photo?.high_resolution?.timestamp) {
+    const t = raw.photo.high_resolution.timestamp;
+    return new Date((t < 1e12 ? t * 1000 : t)).toISOString();
+  }
+  if (raw.photos?.[0]?.high_resolution?.timestamp) {
+    const t = raw.photos[0].high_resolution.timestamp;
+    return new Date((t < 1e12 ? t * 1000 : t)).toISOString();
+  }
+  return '';
 }
 
 /**
